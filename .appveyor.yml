@@ -1,4 +1,4 @@
-image: Visual Studio 2019
+image: Visual Studio 2022
 
 install:
 - ps: |
@@ -7,7 +7,7 @@ install:
     $env:CMDLINE_DEFINE = "FONTLOADERSUB_GIT_VERSION=\""{0}\""" -f $env:COMM_TAG
 
 build_script:
-- msbuild /p:Platform=x86 /p:Configuration=Minimize
+- msbuild /p:Platform=x64 /p:Configuration=Minimize
 
 after_build:
 - ps: |
