@@ -35,6 +35,7 @@ typedef struct {
   void *event_cancel;
   void *hash_alg;
   vec_t loaded_font;
+  vec_t font_filenames;
 } FL_LoaderCtx;
 
 int fl_init(FL_LoaderCtx *c, allocator_t *alloc);

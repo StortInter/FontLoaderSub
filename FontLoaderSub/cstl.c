@@ -1,6 +1,9 @@
 #include "cstl.h"
 #include "ass_string.h"
 #include "util.h"
+#include "windows.h"
+#include "wchar.h"
+#include "stdio.h"
 
 int vec_init(vec_t *v, size_t size, allocator_t *alloc) {
   *v = (vec_t){.size = size, .alloc = alloc};
@@ -168,4 +171,27 @@ void str_db_loads(str_db_t *s, const wchar_t *str, size_t cch, wchar_t ex_pad) {
     .pad_len = ex_pad ? 2 : 1
   };
   // clang-format on
+}
+
+int log_push_u16_le(const wchar_t *str, const wchar_t *logpath)
+{
+    // Open the specified log file for appending (binary mode)
+    FILE *f = _wfopen(logpath, L"ab");
+    if (!f)
+        return 0;
+
+    // Write BOM if file is empty
+    fseek(f, 0, SEEK_END);
+    long pos = ftell(f);
+    if (pos == 0) {
+        unsigned char bom[2] = { 0xFF, 0xFE };
+        fwrite(bom, 1, 2, f);
+    }
+
+    // Write the string (without terminating zero)
+    size_t len = wcslen(str);
+    fwrite(str, sizeof(wchar_t), len, f);
+
+    fclose(f);
+    return 1;
 }

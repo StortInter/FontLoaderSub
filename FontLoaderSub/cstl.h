@@ -54,3 +54,5 @@ const wchar_t *str_db_push_u16_be(str_db_t *s, const wchar_t *str, size_t cch);
 const wchar_t *str_db_str(str_db_t *s, size_t pos, const wchar_t *str);
 
 void str_db_loads(str_db_t *s, const wchar_t *str, size_t cch, wchar_t ex_pad);
+
+int log_push_u16_le(const wchar_t *str, const wchar_t *logpath);

@@ -7,9 +7,12 @@
 #include "shortcut.h"
 #include "mock_config.h"
 #include "res/resource.h"
+#include "time.h"
+#include "wchar.h"
 
 #define kCacheFile L"fc-subs.db"
 #define kBlackFile L"fc-ignore.txt"
+#define logFile L"FontLoaderSub.log"
 
 static void *mem_realloc(void *existing, size_t size, void *arg) {
   HANDLE heap = (HANDLE)arg;
@@ -32,9 +35,32 @@ static void AppHelpUsage(FL_AppCtx *c, HWND hWnd) {
   }
 }
 
+// At the top, add a static helper to add to a vec_t of wchar_t* (no duplicates)
+static void add_filename_to_vec(vec_t *vec, const wchar_t *filename) {
+  wchar_t **arr = vec->data;
+  for (size_t i = 0; i < vec->n; ++i) {
+    if (_wcsicmp(arr[i], filename) == 0)
+      return;  // Duplicate, skip
+  }
+  wchar_t *copy = wcsdup(filename);
+  vec_append(vec, &copy, 1);
+}
+
 static int AppBuildLog(FL_AppCtx *c) {
+  wchar_t dtstr[64];
+  time_t now = time(NULL);
+  struct tm t;
+  localtime_s(&t, &now);
+  wcsftime(dtstr, sizeof(dtstr) / sizeof(dtstr[0]), L"%Y-%m-%d %H:%M:%S\n", &t);
+  log_push_u16_le(dtstr, logFile);  // Write datetime at the head of fls.log
+
   vec_t *loaded = &c->loader.loaded_font;
   str_db_t *log = &c->log;
+  vec_t *full_filenames = &c->loader.font_filenames;
+
+  // Create and init the vec_t for storing filenames
+  vec_t filenames;
+  vec_init(&filenames, sizeof(wchar_t *), c->loader.alloc);
 
   str_db_seek(log, 0);
   FL_FontMatch *data = loaded->data;
@@ -50,23 +76,67 @@ static int AppBuildLog(FL_AppCtx *c) {
       tag = L"[ X] ";
     else if (1 || m->flag & (FL_LOAD_MISS))
       tag = L"[??] ";
+
+    log_push_u16_le(tag, logFile);
     if (!str_db_push_u16_le(log, tag, 0) ||
         !str_db_push_u16_le(log, m->face, 0))
-      return 0;
+      goto error;
+    log_push_u16_le(m->face, logFile);
     if (m->filename && !(m->flag & FL_LOAD_DUP)) {
       if (!str_db_push_u16_le(log, L" > ", 0) ||
           !str_db_push_u16_le(log, m->filename, 0))
-        return 0;
+        goto error;
+      // --- Add to filenames vec ---
+      log_push_u16_le(L" > ", logFile);
+      log_push_u16_le(m->filename, logFile);
+      add_filename_to_vec(&filenames, m->filename);
     }
     if (!str_db_push_u16_le(log, L"\n", 0))
-      return 0;
+      goto error;
+    log_push_u16_le(L"\n", logFile);
   }
+
+  // ---- Compare and print unused fonts ----
+  wchar_t **used = (wchar_t **)filenames.data;
+  wchar_t **all = (wchar_t **)full_filenames->data;
+  for (size_t i = 0; i < full_filenames->n; ++i) {
+    int found = 0;
+    for (size_t j = 0; j < filenames.n; ++j) {
+      if (_wcsicmp(all[i], used[j]) == 0) {
+        found = 1;
+        break;
+      }
+    }
+    if (!found) {
+      // Not used in subtitles, mark as unused
+      if (!str_db_push_u16_le(log, L"[--] ", 0) ||
+          !str_db_push_u16_le(log, all[i], 0) ||
+          !str_db_push_u16_le(log, L"\n", 0))
+        goto error;
+      log_push_u16_le(L"[--] ", logFile);
+      log_push_u16_le(all[i], logFile);
+      log_push_u16_le(L"\n", logFile);
+    }
+  }
+
   const size_t pos = str_db_tell(log);
   if (!pos)
-    return 0;
+    goto error;
   wchar_t *buf = (wchar_t *)str_db_get(log, 0);
   buf[pos - 1] = 0;
+
+  // Cleanup filenames vec
+  for (size_t i = 0; i < filenames.n; ++i)
+    free(((wchar_t **)filenames.data)[i]);
+  vec_clear(&filenames);
   return 1;
+
+error:
+  // Cleanup filenames vec on error
+  for (size_t i = 0; i < filenames.n; ++i)
+    free(((wchar_t **)filenames.data)[i]);
+  vec_clear(&filenames);
+  return 0;
 }
 
 static int AppUpdateStatus(FL_AppCtx *c) {
@@ -325,7 +395,9 @@ static HRESULT CALLBACK DlgDoneButtonDispatch(
     AppHelpUsage(c, hWnd);
     return S_FALSE;
   }
-  default: { return S_FALSE; }
+  default: {
+    return S_FALSE;
+  }
   }
 }
 

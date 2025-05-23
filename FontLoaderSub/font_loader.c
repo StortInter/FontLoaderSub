@@ -22,6 +22,8 @@ int fl_init(FL_LoaderCtx *c, allocator_t *alloc) {
     str_db_init(&c->font_path, alloc, 0, 0);
     str_db_init(&c->walk_path, alloc, 0, 0);
 
+    vec_init(&c->font_filenames, sizeof(wchar_t *), alloc);
+
     c->event_cancel = CreateEvent(NULL, TRUE, FALSE, NULL);
     if (!c->event_cancel) {
       r = FL_OS_ERROR;
@@ -48,6 +50,11 @@ int fl_free(FL_LoaderCtx *c) {
   str_db_free(&c->font_path);
   str_db_free(&c->walk_path);
   fs_free(c->font_set);
+
+  wchar_t **fnames = c->font_filenames.data;
+  for (size_t i = 0; i < c->font_filenames.n; ++i)
+      free(fnames[i]);
+  vec_clear(&c->font_filenames);
 
   return FL_OK;
 }
@@ -153,6 +160,17 @@ int fl_add_subs(FL_LoaderCtx *c, const wchar_t *path) {
   return r;
 }
 
+static void add_font_filename(vec_t *font_filenames, const wchar_t *filename) {
+    // Check for duplicates (case-insensitive)
+    wchar_t **fnames = font_filenames->data;
+    for (size_t i = 0; i < font_filenames->n; ++i) {
+        if (_wcsicmp(fnames[i], filename) == 0)
+            return;
+    }
+    wchar_t *copy = wcsdup(filename);
+    vec_append(font_filenames, &copy, 1);
+}
+
 static int
 fl_walk_font_callback(const wchar_t *path, WIN32_FIND_DATA *data, void *arg) {
   FL_LoaderCtx *c = arg;
@@ -170,6 +188,12 @@ fl_walk_font_callback(const wchar_t *path, WIN32_FIND_DATA *data, void *arg) {
                                       ass_strncasecmp(ext, L".ttf", 4) == 0);
   if (!(match_attr && match_ext))
     return FL_OK;
+  
+  const wchar_t *filename = path;
+  const wchar_t *last_slash = wcsrchr(path, L'\\');
+  if (last_slash)
+      filename = last_slash + 1;
+  add_font_filename(&c->font_filenames, filename);
 
   // try load the file
   memmap_t map;
@@ -301,18 +325,7 @@ int fl_scan_fonts(
 }
 
 int fl_save_cache(FL_LoaderCtx *c, const wchar_t *cache) {
-  int r = FL_OK;
-  str_db_seek(&c->walk_path, 0);
-  if (!str_db_push_u16_le(&c->walk_path, str_db_get(&c->font_path, 0), 0) ||
-      !str_db_push_u16_le(&c->walk_path, L"\\", 1) ||
-      !str_db_push_u16_le(&c->walk_path, cache, 0)) {
-    r = FL_OUT_OF_MEMORY;
-  }
-
-  if (r == FL_OK) {
-    r = fs_cache_dump(c->font_set, str_db_get(&c->walk_path, 0));
-  }
-  return r;
+  return FL_OK;
 }
 
 static int CALLBACK enum_fonts(
@@ -323,16 +336,6 @@ static int CALLBACK enum_fonts(
   int *r = (int *)lParam;
   *r = 1;
   return 1;  // continue
-}
-
-static int IsFontInstalled(const wchar_t *face) {
-  if (MOCK_NO_SYS)
-    return 0;
-  int found = 0;
-  HDC dc = GetDC(0);
-  EnumFontFamilies(dc, face, enum_fonts, (LPARAM)&found);
-  ReleaseDC(0, dc);
-  return found;
 }
 
 static int fl_face_loaded(FL_LoaderCtx *c, const wchar_t *face) {
@@ -535,30 +538,10 @@ int fl_load_fonts(FL_LoaderCtx *c) {
   int r = FL_OK;
   c->num_font_failed = c->num_font_loaded = c->num_font_unmatched = 0;
 
-  // pass 1: scan for existing fonts
-  size_t pos_it = 0;
-  const wchar_t *face;
-  while (r == FL_OK && (face = str_db_next(&c->sub_font, &pos_it)) != NULL) {
-    if ((r = fl_check_cancel(c)) != FL_OK)
-      return r;
-
-    if (IsFontInstalled(face)) {
-      if (vec_prealloc(&c->loaded_font, 1) == 0)
-        r = FL_OUT_OF_MEMORY;
-      if (r == FL_OK) {
-        // FL_FontMatch m = {.flag = FL_OS_LOADED, .face = face};
-        FL_FontMatch m;
-        m.flag = FL_OS_LOADED;
-        m.face = face;
-        m.filename = NULL;
-        vec_append(&c->loaded_font, &m, 1);
-      }
-    }
-  }
-
   // pass 2: load the missing font
   const size_t sys_fonts = c->loaded_font.n;
-  pos_it = 0;
+  size_t pos_it = 0;
+  const wchar_t *face;
   while (r != FL_OUT_OF_MEMORY &&
          (face = str_db_next(&c->sub_font, &pos_it)) != NULL) {
     if (fl_face_loaded(c, face))
